@@ -34,11 +34,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/bootrom.h"
+#include <pico/time.h>
 
 #include "pio_usb.h"
 #include "tusb.h"
@@ -68,24 +68,24 @@ const uint8_t colemak[128] = {
 
 static uint8_t const keycode2ascii[128][2] =  { HID_KEYCODE_TO_ASCII };
 
-absolute_time_t getTime()
+uint64_t getTime()
 {
-    return get_absolute_time();
+    return time_us_64();
 }
 
-absolute_time_t INPUT_SENT;
+uint64_t INPUT_SENT;
 int NUM_TESTS = 10;
-int64_t TEST_DATA[10];
+float TEST_DATA[10];
 int CURR_TEST;
 
 void sendInput() {
   gpio_put(3, false);
 }
 
-int64_t arrmax(int64_t a[], int num_elements)
+float arrmax(float a[], int num_elements)
 {
    int i;
-   int64_t max;
+   float max;
    max = a[0];
    for (i=1; i<num_elements; i++)
    {
@@ -98,10 +98,10 @@ int64_t arrmax(int64_t a[], int num_elements)
    return(max);
 }
 
-int64_t arrmin(int64_t a[], int num_elements)
+float arrmin(float a[], int num_elements)
 {
    int i;
-   int64_t min;
+   float min;
    min = a[0];
    for (i=1; i<num_elements; i++)
    {
@@ -114,9 +114,9 @@ int64_t arrmin(int64_t a[], int num_elements)
    return(min);
 }
 
-float arravg(int64_t a[], int num_elements)
+float arravg(float a[], int num_elements)
 {
-   int64_t sum;
+   float sum;
    int i;
    float avg;
    sum=0;
@@ -320,20 +320,32 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 
 void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len)
 {
-    absolute_time_t inputRecv = getTime();
-    int64_t executionTime = absolute_time_diff_us(INPUT_SENT, inputRecv);
     char tempbuf[256];
-    // int count = sprintf(tempbuf, "Start: %int Finish: %int\n", INPUT_SENT, inputRecv);
+    int count;
+    uint64_t currTime = time_us_64();
+    uint64_t tmpElapsed = currTime - INPUT_SENT;
+    count = sprintf(tempbuf, "Previous: %lluusec Current: %lluusec Elapsed: %lluusec\n", INPUT_SENT, currTime, tmpElapsed);
 
-    // tud_cdc_write(tempbuf, count);
-    // tud_cdc_write_flush();
+    tud_cdc_write(tempbuf, count);
+    tud_cdc_write_flush();
 
+    float elapsedTime = (float)tmpElapsed / 1000.0;
+    count = sprintf(tempbuf, "Current elapsed time: %.2fms\n", elapsedTime);
+
+    tud_cdc_write(tempbuf, count);
+    tud_cdc_write_flush();
+    
 
     xinputh_interface_t *xid_itf = (xinputh_interface_t *)report;
     xinput_gamepad_t *p = &xid_itf->pad;
 
-    if (xid_itf->connected && p->wButtons == XINPUT_GAMEPAD_DPAD_UP) {
-        TEST_DATA[CURR_TEST] = executionTime;
+    if (xid_itf->connected && p->wButtons != 0x0000) {
+        count = sprintf(tempbuf, "Current lag: %.2f\n", elapsedTime);
+
+        tud_cdc_write(tempbuf, count);
+        tud_cdc_write_flush();
+
+        TEST_DATA[CURR_TEST] = elapsedTime;
         sleep_ms(100);
         gpio_put(3, true);
 
@@ -341,52 +353,19 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t c
 
         if (CURR_TEST < NUM_TESTS) {
           sleep_ms(100);
-          INPUT_SENT = getTime();
+          INPUT_SENT = time_us_64();
           gpio_put(3, false);
         } else {
-          int64_t min = arrmin(TEST_DATA, 10);
-          int64_t max = arrmax(TEST_DATA, 10);
-          int64_t avg = arravg(TEST_DATA, 10);
-          int count = sprintf(tempbuf, "Min: %lld usec, Max: %lld usec, Avg: %lld usec\n", min, max, avg);
+          float min = arrmin(TEST_DATA, 10);
+          float max = arrmax(TEST_DATA, 10);
+          float avg = arravg(TEST_DATA, 10);
+          int count = sprintf(tempbuf, "Min:%.2f ms, Max:%.2f ms, Avg: %.2f ms\n", min, max, avg);
 
           tud_cdc_write(tempbuf, count);
           tud_cdc_write_flush();
         }
     }
 
-    // const char* type_str;
-    // switch (xid_itf->type)
-    // {
-    //     case 1: type_str = "Xbox One";          break;
-    //     case 2: type_str = "Xbox 360 Wireless"; break;
-    //     case 3: type_str = "Xbox 360 Wired";    break;
-    //     case 4: type_str = "Xbox OG";           break;
-    //     default: type_str = "Unknown";
-    // }
-
-    // if (xid_itf->connected && xid_itf->new_pad_data)
-    // {
-    //     int count = sprintf(tempbuf, "Input lag: %lld usec\n", executionTime);
-
-    //     tud_cdc_write(tempbuf, count);
-    //     tud_cdc_write_flush();
-
-    //     sleep_ms(3000);
-    //     gpio_put(3, true);
-
-    //     int count = sprintf(tempbuf, "[%02x, %02x], Type: %s, Buttons %04x, LT: %02x RT: %02x, LX: %d, LY: %d, RX: %d, RY: %d\n",
-    //          dev_addr, instance, type_str, p->wButtons, p->bLeftTrigger, p->bRightTrigger, p->sThumbLX, p->sThumbLY, p->sThumbRX, p->sThumbRY);
-
-    //     tud_cdc_write(tempbuf, count);
-    //     tud_cdc_write_flush();
-
-    //     //How to check specific buttons
-    //     if (p->wButtons & XINPUT_GAMEPAD_A) {
-    //       count = sprintf(tempbuf, "You are pressing A\n");
-    //       tud_cdc_write(tempbuf, count);
-    //       tud_cdc_write_flush();
-    //     }
-    // }
     tuh_xinput_receive_report(dev_addr, instance);
 }
 
@@ -410,12 +389,11 @@ void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_inter
     tuh_xinput_set_rumble(dev_addr, instance, 0, 0, true);
     tuh_xinput_receive_report(dev_addr, instance);
 
-    tud_cdc_write("Begin test\n", count);
+    tud_cdc_write("Beginning automatic testing...\n", count);
     tud_cdc_write_flush();
 
     CURR_TEST = 0;
-    //sleep_ms(10 * 1000);
-    INPUT_SENT = getTime();
+    INPUT_SENT = time_us_64();
     gpio_put(3, false);
 }
 
@@ -428,4 +406,5 @@ void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance)
     tud_cdc_write_flush();
 
     CURR_TEST = 0;
+    memset(TEST_DATA, 0, sizeof(TEST_DATA));
 }
