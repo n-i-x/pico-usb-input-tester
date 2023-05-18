@@ -74,7 +74,10 @@ uint64_t getTime()
 }
 
 uint64_t INPUT_SENT;
+uint64_t LAST_FALL_TIME = 0x00;
+uint64_t LAST_RISE_TIME = 0x00;
 int NUM_TESTS = 10;
+uint64_t PIN_DELAY = 100;  // ms to wait after setting a pin high/low
 float TEST_DATA[10];
 int CURR_TEST;
 
@@ -323,47 +326,101 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t c
     char tempbuf[256];
     int count;
     uint64_t currTime = time_us_64();
-    uint64_t tmpElapsed = currTime - INPUT_SENT;
-    count = sprintf(tempbuf, "Previous: %lluusec Current: %lluusec Elapsed: %lluusec\n", INPUT_SENT, currTime, tmpElapsed);
+    uint64_t tmpTestElapsed = currTime - INPUT_SENT;
+    uint64_t tmpEdgeToEdgeTime;
+    float edgeToEdgeTime;
+    
+    // These should probably go in a define...
+    //
+    // count = sprintf(tempbuf, "Previous: %lluusec Current: %lluusec Elapsed: %lluusec\n", INPUT_SENT, currTime, tmpElapsed);
+    // tud_cdc_write(tempbuf, count);
+    // tud_cdc_write_flush();
 
-    tud_cdc_write(tempbuf, count);
-    tud_cdc_write_flush();
+    // count = sprintf(tempbuf, "XInput Report:\n");
+    // tud_cdc_write(tempbuf, count);
+    // tud_cdc_write_flush();
 
-    float elapsedTime = (float)tmpElapsed / 1000.0;
-    count = sprintf(tempbuf, "Current elapsed time: %.2fms\n", elapsedTime);
+    // for(uint16_t i=0; i < len; i++)
+    // {
 
-    tud_cdc_write(tempbuf, count);
-    tud_cdc_write_flush();
+    //   count = sprintf(tempbuf, "0x%02x ", report[i]);
+    //   tud_cdc_write(tempbuf, count);
+    //   tud_cdc_write_flush();
+
+    //   if ((i + 1) % 8 == 0) {
+    //     tud_cdc_write("   ", 3);
+    //     tud_cdc_write_flush();
+    //   }
+
+    //   if ((i + 1) % 16 == 0) {
+    //     tud_cdc_write("\n", 1);
+    //     tud_cdc_write_flush();
+    //   }
+    // }
+
+    float elapsedTime = (float)tmpTestElapsed / 1000.0;
+
+    if (CURR_TEST < NUM_TESTS) {
+      count = sprintf(tempbuf, "\nCurrent test #%d\nElapsed time: %.2fms\n", CURR_TEST + 1, elapsedTime);
+      tud_cdc_write(tempbuf, count);
+      tud_cdc_write_flush();
+    }
     
 
     xinputh_interface_t *xid_itf = (xinputh_interface_t *)report;
     xinput_gamepad_t *p = &xid_itf->pad;
 
-    if (xid_itf->connected && p->wButtons != 0x0000) {
-        count = sprintf(tempbuf, "Current lag: %.2f\n", elapsedTime);
+    if (xid_itf->connected && xid_itf->new_pad_data) {
+      count = sprintf(tempbuf, "Pad data received: 0x%04x\n", p->wButtons);
+      tud_cdc_write(tempbuf, count);
+      tud_cdc_write_flush();
+      if (p->wButtons == 0x0000) {
+          LAST_FALL_TIME = currTime;
+      } else {
+          LAST_RISE_TIME = currTime;
+      }
+    }
+
+    if (LAST_FALL_TIME > LAST_RISE_TIME) {
+      tmpEdgeToEdgeTime = LAST_FALL_TIME - LAST_RISE_TIME;
+      edgeToEdgeTime = ((float)tmpEdgeToEdgeTime / 1000.0);
+      count = sprintf(tempbuf, "Fall detected: %.2fms\n", edgeToEdgeTime);
+      tud_cdc_write(tempbuf, count);
+      tud_cdc_write_flush();
+    }
+    
+    if (LAST_RISE_TIME > LAST_FALL_TIME) {
+      tmpEdgeToEdgeTime = LAST_RISE_TIME - LAST_FALL_TIME;
+      edgeToEdgeTime = ((float)tmpEdgeToEdgeTime / 1000.0);
+
+      count = sprintf(tempbuf, "Rise detected: %.2fms\n", edgeToEdgeTime);
+      tud_cdc_write(tempbuf, count);
+      tud_cdc_write_flush();
+
+      TEST_DATA[CURR_TEST] = edgeToEdgeTime;
+      
+      sleep_ms(PIN_DELAY);
+      LAST_FALL_TIME += PIN_DELAY * 1000;
+      LAST_RISE_TIME += PIN_DELAY * 1000;
+      gpio_put(3, true);
+
+      CURR_TEST++;
+
+      if (CURR_TEST < NUM_TESTS) {
+        sleep_ms(PIN_DELAY);
+        LAST_FALL_TIME += PIN_DELAY * 1000;
+        LAST_RISE_TIME += PIN_DELAY * 1000;
+        INPUT_SENT = time_us_64();
+        gpio_put(3, false);
+      } else {
+        float min = arrmin(TEST_DATA, 10);
+        float max = arrmax(TEST_DATA, 10);
+        float avg = arravg(TEST_DATA, 10);
+        int count = sprintf(tempbuf, "\n\nTest Results:\nMin:%.2f ms, Max:%.2f ms, Avg: %.2f ms\n\n\n", min, max, avg);
 
         tud_cdc_write(tempbuf, count);
         tud_cdc_write_flush();
-
-        TEST_DATA[CURR_TEST] = elapsedTime;
-        sleep_ms(100);
-        gpio_put(3, true);
-
-        CURR_TEST++;
-
-        if (CURR_TEST < NUM_TESTS) {
-          sleep_ms(100);
-          INPUT_SENT = time_us_64();
-          gpio_put(3, false);
-        } else {
-          float min = arrmin(TEST_DATA, 10);
-          float max = arrmax(TEST_DATA, 10);
-          float avg = arravg(TEST_DATA, 10);
-          int count = sprintf(tempbuf, "Min:%.2f ms, Max:%.2f ms, Avg: %.2f ms\n", min, max, avg);
-
-          tud_cdc_write(tempbuf, count);
-          tud_cdc_write_flush();
-        }
+      }
     }
 
     tuh_xinput_receive_report(dev_addr, instance);
@@ -389,7 +446,7 @@ void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_inter
     tuh_xinput_set_rumble(dev_addr, instance, 0, 0, true);
     tuh_xinput_receive_report(dev_addr, instance);
 
-    tud_cdc_write("Beginning automatic testing...\n", count);
+    tud_cdc_write("Beginning automatic testing...\n", 32);
     tud_cdc_write_flush();
 
     CURR_TEST = 0;
